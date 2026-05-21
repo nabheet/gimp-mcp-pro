@@ -60,6 +60,40 @@ def exec_and_capture(command, context):
     return buf.getvalue()
 
 
+def _run_server(plugin):
+    """Run the TCP server in a background thread."""
+    plugin.running = True
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.settimeout(1.0)
+    try:
+        sock.bind((plugin.host, plugin.port))
+        sock.listen(1)
+        plugin.server_socket = sock
+        print(f"GIMP MCP Pro server started on {plugin.host}:{plugin.port}", flush=True)
+
+        while plugin.running:
+            try:
+                client, address = sock.accept()
+                print(f"Client connected: {address}", flush=True)
+                t = threading.Thread(target=plugin._handle_client, args=(client,), daemon=True)
+                t.start()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+    except Exception as e:
+        print(f"Server error: {e}", flush=True)
+    finally:
+        plugin.running = False
+        try:
+            sock.close()
+        except:
+            pass
+        print("MCP Pro server stopped", flush=True)
+
+
 class MCPProPlugin(Gimp.PlugIn):
     """Enhanced GIMP MCP plugin with reliable framing and native handlers."""
 
@@ -72,6 +106,12 @@ class MCPProPlugin(Gimp.PlugIn):
         # Persistent Python execution context
         self.exec_context = {}
         exec("from gi.repository import Gimp, Gegl", self.exec_context)
+        # Set up signal handlers in main thread before starting server thread
+        signal.signal(signal.SIGTERM, lambda *a: self._shutdown())
+        signal.signal(signal.SIGINT, lambda *a: self._shutdown())
+        # Auto-start server thread on construction (handles both query and run mode)
+        t = threading.Thread(target=_run_server, args=(self,), daemon=False)
+        t.start()
 
     # ------------------------------------------------------------------
     # GIMP Plugin registration
@@ -81,54 +121,25 @@ class MCPProPlugin(Gimp.PlugIn):
         return ["plug-in-mcp-pro-server"]
 
     def do_create_procedure(self, name):
-        procedure = Gimp.ImageProcedure.new(
+        procedure = Gimp.Procedure.new(
             self, name, Gimp.PDBProcType.PLUGIN, self.run, None
         )
-        procedure.set_menu_label(_("Start MCP Pro Server"))
+        procedure.set_menu_label(_("MCP Pro Server (running)"))
         procedure.set_documentation(
-            _("Starts the MCP Pro server for AI-assisted GIMP editing"),
-            _("Starts a socket server that exposes GIMP operations via MCP"),
+            _("Shows MCP Pro server status"),
+            _("Displays the current status of the MCP Pro server"),
             name,
         )
         procedure.set_attribution("GIMP MCP Pro", "GIMP MCP Pro Contributors", "2026")
-        procedure.add_menu_path('<Image>/Tools/')
         return procedure
 
-    def run(self, procedure, run_mode, image, drawables, config, run_data):
+    def run(self, procedure, config, run_data):
         if self.running:
-            print("MCP Pro Server is already running")
-            return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())
-
-        self.running = True
-        signal.signal(signal.SIGTERM, self._shutdown)
-        signal.signal(signal.SIGINT, self._shutdown)
-
-        try:
-            self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.server_socket.settimeout(1.0)
-            self.server_socket.bind((self.host, self.port))
-            self.server_socket.listen(1)
-
-            print(f"GIMP MCP Pro server started on {self.host}:{self.port}")
-
-            while self.running:
-                try:
-                    client, address = self.server_socket.accept()
-                    print(f"Client connected: {address}")
-                    t = threading.Thread(target=self._handle_client, args=(client,), daemon=True)
-                    t.start()
-                except socket.timeout:
-                    continue
-                except OSError:
-                    break
-
-            print("MCP Pro server stopped")
-            return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())
-        except Exception as e:
-            print(f"Server error: {e}")
-            self.running = False
-            return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())
+            msg = f"MCP Pro Server is running on {self.host}:{self.port}"
+        else:
+            msg = "MCP Pro Server is not running"
+        print(msg, flush=True)
+        return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())
 
     def _shutdown(self, signum=None, frame=None):
         print("Shutting down MCP Pro server...")
