@@ -89,7 +89,7 @@ def _run_server(plugin):
         plugin.running = False
         try:
             sock.close()
-        except:
+        except OSError:
             pass
         print("MCP Pro server stopped", flush=True)
 
@@ -110,7 +110,7 @@ class MCPProPlugin(Gimp.PlugIn):
         signal.signal(signal.SIGTERM, lambda *a: self._shutdown())
         signal.signal(signal.SIGINT, lambda *a: self._shutdown())
         # Auto-start server thread on construction (handles both query and run mode)
-        t = threading.Thread(target=_run_server, args=(self,), daemon=False)
+        t = threading.Thread(target=_run_server, args=(self,), daemon=True)
         t.start()
 
     # ------------------------------------------------------------------
@@ -139,7 +139,7 @@ class MCPProPlugin(Gimp.PlugIn):
         else:
             msg = "MCP Pro Server is not running"
         print(msg, flush=True)
-        return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())
+        return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, None)
 
     def _shutdown(self, signum=None, frame=None):
         print("Shutting down MCP Pro server...")
@@ -147,7 +147,7 @@ class MCPProPlugin(Gimp.PlugIn):
         if self.server_socket:
             try:
                 self.server_socket.close()
-            except:
+            except OSError:
                 pass
 
     # ------------------------------------------------------------------
